@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "900212619224",
+    "project_id": "askchat-e7148",
+    "storage_bucket": "askchat-e7148.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:900212619224:android:e5bff43388a1cfd9fbe4ad",
+        "android_client_info": {
+          "package_name": "com.example.askchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCYTIebrIX6r_XvmBYPZjMJCFUh414VoYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
