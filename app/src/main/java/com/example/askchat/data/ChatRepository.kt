@@ -6,6 +6,7 @@ import com.example.askchat.model.Message
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
@@ -13,6 +14,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+
 
 class ChatRepository {
 
@@ -85,6 +87,7 @@ class ChatRepository {
             )
             .await()
     }
+
     fun chatsFlow(): Flow<List<Chat>> = callbackFlow {
         val uid = requireUid()
         val reg = db.collection("chats")
@@ -114,5 +117,42 @@ class ChatRepository {
                 trySend(items)
             }
         awaitClose { reg.remove() }
+    }
+
+    suspend fun createOrGetDirectChat(peerUid: String): String {
+        val db = FirebaseFirestore.getInstance()
+        val myUid = FirebaseAuth.getInstance().currentUser!!.uid
+
+        // Helper to create a deterministic participants key
+        fun dmKey(a: String, b: String) = if (a <= b) "${a}_${b}" else "${b}_${a}"
+        val key = dmKey(myUid, peerUid)
+
+        // ✅ FIX: Add whereArrayContains("participants", myUid)
+        val query = db.collection("chats")
+            .whereEqualTo("type", "dm")
+            .whereEqualTo("participantsKey", key)
+            .whereArrayContains("participants", myUid)
+            .limit(1)
+
+        val result = query.get().await()
+        if (!result.isEmpty) {
+            return result.documents.first().id
+        }
+// NthosSJOPiTI2AZPSx2mdZ89Nvl1
+        // Create chat if none exists
+        val chatData = mapOf(
+            "type" to "dm",
+            "participants" to listOf(myUid, peerUid),
+            "participantsKey" to key,
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "lastMessage" to mapOf(
+                "text" to "👋 Say hi!",
+                "senderId" to myUid,
+                "timestamp" to FieldValue.serverTimestamp()
+            )
+        )
+
+        val newChat = db.collection("chats").add(chatData).await()
+        return newChat.id
     }
 }

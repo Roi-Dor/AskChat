@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,7 @@ import androidx.core.content.PermissionChecker
 import androidx.lifecycle.lifecycleScope
 import com.example.askchat.data.FcmTokenManager
 import com.example.askchat.ui.AppNav
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -44,12 +46,17 @@ class MainActivity : ComponentActivity() {
                 AppNav(initialDeepLinkChatId = intent?.getStringExtra("chatId"))
             }
             registerFcmTokenIfSignedIn()
+
         }
     }
 
     private fun ensureSignedIn(onReady: () -> Unit) {
         val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
         val user = auth.currentUser
+        val uid = user?.uid
+
+        Log.d("Auth", "User UID = $uid")
+
         if (user != null) {
             onReady()
             return
@@ -102,6 +109,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // If you haven't created ChatRepository/ChatActivity yet, keep this removed or commented:
-    // private fun openAskChat() { ... }
+
 }
