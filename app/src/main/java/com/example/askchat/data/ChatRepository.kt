@@ -138,7 +138,6 @@ class ChatRepository {
         if (!result.isEmpty) {
             return result.documents.first().id
         }
-// NthosSJOPiTI2AZPSx2mdZ89Nvl1
         // Create chat if none exists
         val chatData = mapOf(
             "type" to "dm",
