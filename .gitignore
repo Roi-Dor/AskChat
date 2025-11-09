@@ -32,3 +32,17 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# secrets
+functions/service-account.json
+*.secret.*
+*.key
+*.p12
+*.pem
+*.crt
+*.der
+*.keystore
+*.jks
+*.pfx
+*.env
+.env*
