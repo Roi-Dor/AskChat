@@ -1,105 +1,135 @@
-// v2 HTTPS + Firestore, v1 Auth
-import {onRequest} from "firebase-functions/v2/https";
-import {onDocumentCreated} from "firebase-functions/v2/firestore";
-import {setGlobalOptions} from "firebase-functions/v2/options";
-import * as functions from "firebase-functions";
+// redeploy: 2025-11-08 13:29:31
+// redeploy: 2025-11-08 13:24:09
 import * as admin from "firebase-admin";
-
-setGlobalOptions({region: "us-east4"});
+import * as functions from "firebase-functions";
 
 admin.initializeApp();
 const db = admin.firestore();
-const ASKCHAT_UID = "askchat";
 
-// 1) Ensure AskChat user exists (trigger once via browser/console)
-export const ensureAskChatUser = onRequest(async (_req, res) => {
-  const doc = await db.collection("users").doc(ASKCHAT_UID).get();
-  if (!doc.exists) {
-    await db.collection("users").doc(ASKCHAT_UID).set({
-      displayName: "AskChat",
-      photoUrl: null,
-      fcmTokens: [],
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  }
-  res.status(200).send("ok");
-});
+const REGION = "europe-west1";
+const ASKCHAT_SENDER_ID = "AskChat";
 
-// 2) On Auth user create (v1) -> create system chat with AskChat
-export const userCreatedCreateAskChat = functions
-  .region("us-east4")
-  .auth.user()
-  .onCreate(async (user) => {
-    const participants = [user.uid, ASKCHAT_UID].sort();
-    const chatId = participants.join("_");
-    const chatRef = db.collection("chats").doc(chatId);
+// ---- config (prefer functions:config, then env) ----
+type AskchatCfg = {url?: string; token?: string};
+type FullCfg = {askchat?: AskchatCfg};
 
-    if ((await chatRef.get()).exists) return;
+const cfg = (functions.config() as FullCfg) || {};
+const BACKEND_URL = cfg.askchat?.url ??
+  process.env.ASKCHAT_BACKEND_URL ?? "";
+const BACKEND_TOKEN = cfg.askchat?.token ??
+  process.env.ASKCHAT_BACKEND_TOKEN ?? "";
 
-    await chatRef.set({
-      type: "system",
-      participants,
-      lastMessage: {
-        text: "Hi! I’m AskChat. Ask me anything about your chats.",
-        senderId: ASKCHAT_UID,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    await chatRef.collection("messages").add({
-      senderId: ASKCHAT_UID,
-      text: "Hi! I’m AskChat. Ask me anything about your chats.",
-      mediaUrl: null,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  });
-
-// 3) On message create (v2) -> update chat summary + send FCM
-export const messageCreated = onDocumentCreated(
-  "chats/{chatId}/messages/{messageId}",
-  async (event: any) => {
-    const snap = event.data;
-    if (!snap) return;
-
-    const chatId = event.params.chatId;
-    const message = snap.data() as {
-      senderId: string;
-      text?: string|null;
-      mediaUrl?: string|null;
-    };
-
-    const chatRef = db.collection("chats").doc(chatId);
-    const chatDoc = await chatRef.get();
-    const chat = chatDoc.data() as {participants: string[]}|undefined;
-    if (!chat) return;
-
-    // Update chat summary
-    await chatRef.update({
-      lastMessage: {
-        text: message.text ?? (message.mediaUrl ? "Media" : ""),
-        senderId: message.senderId,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // Push notify recipients
-    const recipients = chat.participants.filter((p) => p !== message.senderId);
-    for (const uid of recipients) {
-      const userDoc = await db.collection("users").doc(uid).get();
-      const tokens = (userDoc.data()?.fcmTokens as string[]) ?? [];
-      if (!tokens.length) continue;
-
-      await admin.messaging().sendEachForMulticast({
-        tokens,
-        notification: {
-          title: "New message",
-          body: message.text ?? "Sent you a photo",
-        },
-        data: {chatId},
-      });
-    }
-  }
+console.log(
+  "[AskChat] Config",
+  JSON.stringify({
+    REGION: REGION,
+    BACKEND_URL: BACKEND_URL || "(missing)",
+  })
 );
 
+// ---- types ----
+type Msg = {text?: string; senderId?: string; aiHandled?: boolean};
+type Chat = {type?: string};
+type Source = {chatId: string; messageId: string; text?: string};
+
+/**
+ * Call the FastAPI /ask endpoint and return answer + sources.
+ * @param {string} question The user's question text.
+ * @return {Promise<{answer: string, sources: Source[]}>} Ask response.
+ */
+async function callAsk(
+  question: string
+): Promise<{answer: string; sources: Source[]}> {
+  if (!BACKEND_URL) throw new Error("BACKEND_URL missing");
+  const base = BACKEND_URL.replace(/\/+$/, "");
+  const url = base + "/ask";
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Askchat-Token": BACKEND_TOKEN,
+    },
+    body: JSON.stringify({question: question, top_k: 5}),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    const msg = "AskChat /ask failed " +
+      String(resp.status) + ": " + (body || "(no body)");
+    throw new Error(msg);
+  }
+  return (await resp.json()) as {answer: string; sources: Source[]};
+}
+
+// ---- trigger on new message in AskChat room ----
+export const onAskChatMessage = functions
+  .region(REGION)
+  .runWith({timeoutSeconds: 60, memory: "256MB"})
+  .firestore.document("chats/{chatId}/messages/{messageId}")
+  .onCreate(async (snap, ctx) => {
+    const chatId = ctx.params.chatId;
+    const messageId = ctx.params.messageId;
+    const msg = snap.data() as Msg;
+
+    console.log("[AskChat] onCreate", chatId + "/" + messageId);
+
+    const chatSnap = await db.collection("chats").doc(chatId).get();
+    const chat = (chatSnap.data() as Chat | undefined) || {};
+    if (chat.type !== "askchat") {
+      console.log("[AskChat] Skip: chat.type=" + chat.type);
+      return;
+    }
+    if (!msg.text) {
+      console.log("[AskChat] Skip: empty text");
+      return;
+    }
+    if ((msg.senderId || "") === ASKCHAT_SENDER_ID) {
+      console.log("[AskChat] Skip: sender is AskChat");
+      return;
+    }
+
+    // idempotency
+    try {
+      await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(snap.ref);
+        const cur = fresh.data() as Msg | undefined;
+        if (!cur) return;
+        if (cur.aiHandled) {
+          console.log("[AskChat] Skip: already aiHandled");
+          return;
+        }
+        tx.update(snap.ref, {aiHandled: true});
+      });
+    } catch (e) {
+      console.warn("[AskChat] aiHandled txn error:",
+        (e as Error).message);
+    }
+
+    // call backend and write reply
+    try {
+      console.log("[AskChat] Calling /ask ...");
+      const data = await callAsk(msg.text as string);
+      const sources = (data.sources || [])
+        .map((s) => s.chatId + "::" + s.messageId);
+
+      await db.collection("chats").doc(chatId)
+        .collection("messages").add({
+          text: data.answer ||
+            "Sorry, I couldn’t find anything relevant.",
+          senderId: ASKCHAT_SENDER_ID,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          sources: sources,
+        });
+      console.log("[AskChat] Reply written.");
+    } catch (e) {
+      console.error("[AskChat] /ask error:", (e as Error).message);
+      await db.collection("chats").doc(chatId)
+        .collection("messages").add({
+          text: "Sorry, I couldn’t reach AskChat’s brain. " +
+            "Try again later.",
+          senderId: ASKCHAT_SENDER_ID,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    }
+  });

@@ -9,5 +9,6 @@ data class Message(
     val senderId: String = "",
     val text: String? = null,
     val mediaUrl: String? = null,
+    val sources: List<String>? = null,
     @ServerTimestamp val timestamp: Timestamp? = null
 )
