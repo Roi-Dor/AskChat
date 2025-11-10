@@ -8,3 +8,6 @@ typings/
 # Node.js dependency directory
 node_modules/
 *.local
+
+# Google Services (e.g. APIs or Firebase)
+service-account.json
